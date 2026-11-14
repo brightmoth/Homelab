@@ -1,1 +1,106 @@
-steps go here
+# Jellyfin with Docker, Nginx Proxy Manager, and DuckDNS
+
+This guide covers exposing a Jellyfin server running on your computer to the internet using Nginx Proxy Manager and DuckDNS.
+
+## Before you start
+
+- Install Jellyfin and confirm it works on your local network at `http://YOUR_SERVER_IP:8096`.
+- Find your computer's local IPv4 address:
+  - **Windows:** run `ipconfig` in Command Prompt and find the IPv4 address for your active network connection.
+  - **Linux:** run `ip a`.
+- Install and start Docker Desktop on Windows (or Docker Engine and the Compose plugin on Linux).
+- Make sure ports 80 and 443 are available on your computer. Do not expose port 81 to the internet.
+
+The examples below use `C:\DOCKER` on Windows. On Linux, use `~/DOCKER` instead.
+
+## 1. Start Nginx Proxy Manager
+
+Create a folder named `NPM` inside `DOCKER`, then create `compose.yaml` in that folder:
+
+```yaml
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "81:81"
+      - "443:443"
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+```
+
+Open a terminal in the `NPM` folder and start the container:
+
+```powershell
+docker compose up -d
+```
+
+Open the Nginx Proxy Manager dashboard at [http://localhost:81](http://localhost:81).
+
+## 2. Add a DuckDNS domain
+
+1. Sign in at [DuckDNS](https://www.duckdns.org/).
+2. Enter a subdomain and add it. For example, if you create `my-jellyfin`, your full domain is `my-jellyfin.duckdns.org`.
+3. Copy your DuckDNS token. Keep it private.
+
+## 3. Start DuckDNS
+
+Create a folder named `DuckDNS` inside `DOCKER`, then create `compose.yaml` in it. Replace `YOUR_SUBDOMAIN` with the subdomain only (not the full domain), and replace `YOUR_DUCKDNS_TOKEN` with your token.
+
+```yaml
+services:
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: duckdns
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Africa/Johannesburg
+      - SUBDOMAINS=YOUR_SUBDOMAIN
+      - TOKEN=YOUR_DUCKDNS_TOKEN
+```
+
+Change `TZ` if needed; for example, use `America/New_York` for US Eastern time.
+
+Open a terminal in the `DuckDNS` folder and start the container:
+
+```powershell
+docker compose up -d
+```
+
+## 4. Set up the proxy host
+
+In Nginx Proxy Manager, open **Hosts → Proxy Hosts → Add Proxy Host** and enter:
+
+| Setting | Value |
+| --- | --- |
+| Domain Names | `YOUR_SUBDOMAIN.duckdns.org` |
+| Scheme | `http` |
+| Forward Hostname / IP | Your Jellyfin computer's local IPv4 address |
+| Forward Port | `8096` |
+
+Enable **Websockets Support**, then save. Use your computer's local IPv4 address here because Jellyfin is running on the host, outside the Nginx Proxy Manager container.
+
+## 5. Forward ports on your router
+
+In your router's port-forwarding settings, add these TCP rules to the computer running Docker. Reserve its local IP address in the router if possible so the rules keep pointing to the right computer.
+
+| Protocol | External port | Internal IP | Internal port |
+| --- | ---: | --- | ---: |
+| TCP | 80 | Your computer's local IPv4 address | 80 |
+| TCP | 443 | Your computer's local IPv4 address | 443 |
+
+Do **not** forward port 81 or Jellyfin port 8096. Nginx Proxy Manager handles external web traffic and forwards it to Jellyfin.
+
+## 6. Enable HTTPS and test
+
+1. Edit the proxy host in Nginx Proxy Manager and open the **SSL** tab.
+2. Choose **Request a new SSL Certificate**, enter your email, and agree to the terms.
+3. Enable **Force SSL** and **HTTP/2 Support**, then save.
+4. Wait for the certificate to be issued, then test `https://YOUR_SUBDOMAIN.duckdns.org` from a device outside your home network, such as a phone using mobile data.
+
+If the certificate request or external connection fails, confirm that DuckDNS points to your current public IP, the router forwards ports 80 and 443 to the correct computer, and your ISP/router allows inbound connections. Some connections use CGNAT or double NAT, which can prevent ordinary port forwarding from working.
